@@ -18,6 +18,10 @@ def startup():
 def health():
     return Response(content="OK", media_type="text/plain")
 
+@app.get("/")
+def root():
+    return {"status": "ok"}
+
 
 @app.post("/jobs")
 def create_job():
