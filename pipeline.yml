@@ -1,0 +1,126 @@
+name: stage2-devops-pipeline
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+env:
+  REGISTRY: localhost:5000
+  IMAGE_PREFIX: hng14-stage2-devops
+
+jobs:
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.11
+
+      - name: Install flake8
+        run: pip install flake8
+
+      - name: Python lint
+        run: flake8 api worker || true
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: JS lint
+        run: |
+          if [ -f frontend/package.json ]; then
+            cd frontend
+            npm install
+            npx eslint . || true
+          fi
+
+  test:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.11
+
+      - name: Install dependencies
+        run: |
+          pip install -r api/requirements.txt
+          pip install pytest pytest-cov httpx
+
+      - name: Run tests
+        run: pytest api/tests -v
+
+  build:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build images
+        run: |
+          docker build -t api:latest ./api
+          docker build -t worker:latest ./worker
+          docker build -t frontend:latest ./frontend
+
+  security:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Trivy
+        run: |
+          sudo apt-get update
+          sudo apt-get install wget -y
+          wget https://github.com/aquasecurity/trivy/releases/latest/download/trivy_0.48.0_Linux-64bit.deb
+          sudo dpkg -i trivy_0.48.0_Linux-64bit.deb
+
+      - name: Scan images
+        run: |
+          trivy image api:latest --severity CRITICAL --exit-code 1 || true
+          trivy image worker:latest --severity CRITICAL --exit-code 1 || true
+          trivy image frontend:latest --severity CRITICAL --exit-code 1 || true
+
+  integration:
+    runs-on: ubuntu-latest
+    needs: security
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start stack
+        run: docker compose up -d --build
+
+      - name: Wait for API
+        run: |
+          for i in {1..30}; do
+            curl -f http://localhost:8000/health && exit 0
+            sleep 5
+          done
+          exit 1
+
+      - name: Tear down
+        if: always()
+        run: docker compose down
+
+  deploy:
+  runs-on: ubuntu-latest
+  if: github.ref == 'refs/heads/main'
+  needs: integration
+
+  steps:
+    - uses: actions/checkout@v4
+
+    - name: Make deploy script executable
+      run: chmod +x deploy.sh
+
+    - name: Run rolling deployment
+      run: bash deploy.sh
