@@ -5,10 +5,6 @@ on:
     branches: ["**"]
   pull_request:
 
-env:
-  REGISTRY: localhost:5000
-  IMAGE_PREFIX: hng14-stage2-devops
-
 jobs:
 
   lint:
@@ -25,20 +21,8 @@ jobs:
         run: pip install flake8
 
       - name: Python lint
-        run: flake8 api worker || true
+        run: flake8 api worker
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 18
-
-      - name: JS lint
-        run: |
-          if [ -f frontend/package.json ]; then
-            cd frontend
-            npm install
-            npx eslint . || true
-          fi
 
   test:
     runs-on: ubuntu-latest
@@ -56,20 +40,47 @@ jobs:
           pip install -r api/requirements.txt
           pip install pytest pytest-cov httpx
 
-      - name: Run tests
-        run: pytest api/tests -v
+      - name: Run tests with coverage
+        run: pytest api/tests -v --cov=api --cov-report=xml
 
-  build:
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+
+
+  dockerlint:
     runs-on: ubuntu-latest
     needs: test
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build images
+      - name: Install hadolint
+        run: |
+          wget -O hadolint https://github.com/hadolint/hadolint/releases/latest/download/hadolint-Linux-x86_64
+          chmod +x hadolint
+          sudo mv hadolint /usr/local/bin/
+
+      - name: Lint Dockerfiles
+        run: |
+          hadolint api/Dockerfile
+          hadolint worker/Dockerfile
+          hadolint frontend/Dockerfile
+
+
+  build:
+    runs-on: ubuntu-latest
+    needs: dockerlint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker images
         run: |
           docker build -t api:latest ./api
           docker build -t worker:latest ./worker
           docker build -t frontend:latest ./frontend
+
 
   security:
     runs-on: ubuntu-latest
@@ -84,11 +95,12 @@ jobs:
           wget https://github.com/aquasecurity/trivy/releases/latest/download/trivy_0.48.0_Linux-64bit.deb
           sudo dpkg -i trivy_0.48.0_Linux-64bit.deb
 
-      - name: Scan images
+      - name: Scan images (FAIL ON CRITICAL)
         run: |
-          trivy image api:latest --severity CRITICAL --exit-code 1 || true
-          trivy image worker:latest --severity CRITICAL --exit-code 1 || true
-          trivy image frontend:latest --severity CRITICAL --exit-code 1 || true
+          trivy image api:latest --severity CRITICAL --exit-code 1
+          trivy image worker:latest --severity CRITICAL --exit-code 1
+          trivy image frontend:latest --severity CRITICAL --exit-code 1
+
 
   integration:
     runs-on: ubuntu-latest
@@ -96,31 +108,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Start stack
+      - name: Start full stack
         run: docker compose up -d --build
 
-      - name: Wait for API
+      - name: Wait for API readiness
         run: |
           for i in {1..30}; do
-            curl -f http://localhost:8000/health && exit 0
+            if curl -f http://localhost:8000/health; then
+              echo "API is healthy"
+              exit 0
+            fi
             sleep 5
           done
+          echo "API failed to start"
           exit 1
 
-      - name: Tear down
+      - name: Tear down stack
         if: always()
         run: docker compose down
 
+
   deploy:
-  runs-on: ubuntu-latest
-  if: github.ref == 'refs/heads/main'
-  needs: integration
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    needs: integration
+    steps:
+      - uses: actions/checkout@v4
 
-  steps:
-    - uses: actions/checkout@v4
+      - name: Make deploy script executable
+        run: chmod +x deploy.sh
 
-    - name: Make deploy script executable
-      run: chmod +x deploy.sh
-
-    - name: Run rolling deployment
-      run: bash deploy.sh
+      - name: Rolling deployment
+        run: bash deploy.sh
