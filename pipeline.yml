@@ -7,7 +7,7 @@ on:
 
 env:
   REGISTRY: localhost:5000
-  IMAGE_PREFIX: hng14-stage2-devops
+  IMAGE_PREFIX: docker tag api:latest localhost:5000/api:$GIT_SHA
 
 jobs:
 
@@ -35,11 +35,10 @@ jobs:
 
       - name: JS lint
         run: |
-          if [ -f frontend/package.json ]; then
+          
             cd frontend
             npm install
-            npx eslint . || true
-          fi
+            npx eslint .
 
 # ---------------- TEST ----------------
   test:
@@ -58,7 +57,7 @@ jobs:
           pip install -r api/requirements.txt
           pip install pytest pytest-cov httpx
 
-      - name: Run tests
+      - name: Run tests with coverage
         run: pytest api/tests -v --cov=api --cov-report=xml
 
       - name: Upload coverage
@@ -93,14 +92,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set tag
+      - name: Set SHA
         run: echo "GIT_SHA=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
 
-      - name: Build images
-        run: |
-          docker build -t $REGISTRY/api:$GIT_SHA ./api
-          docker build -t $REGISTRY/worker:$GIT_SHA ./worker
-          docker build -t $REGISTRY/frontend:$GIT_SHA ./frontend
+      - name: Build Docker images (cache enabled)
+  run: |
+    docker build --cache-from api:latest -t api:latest ./api
+    docker build --cache-from worker:latest -t worker:latest ./worker
+    docker build --cache-from frontend:latest -t frontend:latest ./frontend
 
 # ---------------- SECURITY ----------------
   security:
