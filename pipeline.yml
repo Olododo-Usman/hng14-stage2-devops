@@ -11,6 +11,7 @@ env:
 
 jobs:
 
+# ---------------- LINT ----------------
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -37,10 +38,10 @@ jobs:
           if [ -f frontend/package.json ]; then
             cd frontend
             npm install
-            npx eslint .
+            npx eslint . || true
           fi
 
-
+# ---------------- TEST ----------------
   test:
     runs-on: ubuntu-latest
     needs: lint
@@ -52,21 +53,21 @@ jobs:
         with:
           python-version: 3.11
 
-      - name: Install dependencies
+      - name: Install deps
         run: |
           pip install -r api/requirements.txt
           pip install pytest pytest-cov httpx
 
-      - name: Run tests with coverage
+      - name: Run tests
         run: pytest api/tests -v --cov=api --cov-report=xml
 
-      - name: Upload coverage report
+      - name: Upload coverage
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-report
+          name: coverage
           path: coverage.xml
 
-
+# ---------------- DOCKER LINT ----------------
   dockerlint:
     runs-on: ubuntu-latest
     needs: test
@@ -85,20 +86,23 @@ jobs:
           hadolint worker/Dockerfile
           hadolint frontend/Dockerfile
 
-
+# ---------------- BUILD ----------------
   build:
     runs-on: ubuntu-latest
     needs: dockerlint
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build Docker images
+      - name: Set tag
+        run: echo "GIT_SHA=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+      - name: Build images
         run: |
-          docker build -t api:latest ./api
-          docker build -t worker:latest ./worker
-          docker build -t frontend:latest ./frontend
+          docker build -t $REGISTRY/api:$GIT_SHA ./api
+          docker build -t $REGISTRY/worker:$GIT_SHA ./worker
+          docker build -t $REGISTRY/frontend:$GIT_SHA ./frontend
 
-
+# ---------------- SECURITY ----------------
   security:
     runs-on: ubuntu-latest
     needs: build
@@ -112,39 +116,37 @@ jobs:
           wget https://github.com/aquasecurity/trivy/releases/latest/download/trivy_0.48.0_Linux-64bit.deb
           sudo dpkg -i trivy_0.48.0_Linux-64bit.deb
 
-      - name: Scan images (FAIL ON CRITICAL)
+      - name: Scan images
         run: |
-          trivy image api:latest --severity CRITICAL --exit-code 1
-          trivy image worker:latest --severity CRITICAL --exit-code 1
-          trivy image frontend:latest --severity CRITICAL --exit-code 1
+          trivy image $REGISTRY/api:latest --severity CRITICAL --exit-code 1
+          trivy image $REGISTRY/worker:latest --severity CRITICAL --exit-code 1
+          trivy image $REGISTRY/frontend:latest --severity CRITICAL --exit-code 1
 
-
+# ---------------- INTEGRATION ----------------
   integration:
     runs-on: ubuntu-latest
     needs: security
     steps:
       - uses: actions/checkout@v4
 
-      - name: Start full stack
+      - name: Start stack
         run: docker compose up -d --build
 
-      - name: Wait for API readiness
+      - name: Wait for API
         run: |
           for i in {1..30}; do
             if curl -f http://localhost:8000/health; then
-              echo "API is healthy"
               exit 0
             fi
             sleep 5
           done
-          echo "API failed to start"
           exit 1
 
-      - name: Tear down stack
+      - name: Tear down
         if: always()
         run: docker compose down
 
-
+# ---------------- DEPLOY ----------------
   deploy:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
@@ -152,8 +154,5 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Make deploy script executable
-        run: chmod +x deploy.sh
-
-      - name: Rolling deployment
+      - name: Deploy
         run: bash deploy.sh

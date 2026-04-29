@@ -1,8 +1,10 @@
+version: "3.8"
+
 services:
+
   redis:
     image: redis:7-alpine
-    networks:
-      - backend
+    networks: [backend]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -17,18 +19,12 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    networks:
-      - backend
+    networks: [backend]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
       timeout: 5s
       retries: 5
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: "512M"
 
   worker:
     build: ./worker
@@ -36,24 +32,15 @@ services:
     depends_on:
       api:
         condition: service_healthy
-    networks:
-      - backend
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: "512M"
+    networks: [backend]
 
   frontend:
     build: ./frontend
     env_file: .env
     ports:
       - "8080:3000"
-    depends_on:
-      api:
-        condition: service_started
-    networks:
-      - backend
+    networks: [backend]
 
 networks:
   backend:
+    driver: bridge

@@ -2,39 +2,31 @@
 
 set -e
 
-echo "🚀 Starting rolling deployment..."
+TAG=$(git rev-parse --short HEAD)
 
-# Step 1: Pull latest code/build
-docker compose build
+echo "Deploying version $TAG"
 
-# Step 2: Start new version WITHOUT stopping old one yet
-docker compose up -d
+docker pull localhost:5000/api:$TAG || true
 
-# Step 3: Wait for health check (60 seconds max)
-TIMEOUT=60
-INTERVAL=5
-ELAPSED=0
+docker stop api_old || true
+docker rm api_old || true
 
-echo "⏳ Waiting for API health..."
+docker rename api api_old || true
 
-until curl -f http://localhost:8000/health; do
-  sleep $INTERVAL
-  ELAPSED=$((ELAPSED + INTERVAL))
+docker run -d \
+  --name api \
+  -p 8000:8000 \
+  localhost:5000/api:$TAG
 
-  if [ $ELAPSED -ge $TIMEOUT ]; then
-    echo "❌ Health check failed - rolling back"
+echo "Waiting for health check..."
 
-    docker compose down
-    exit 1
+for i in {1..30}; do
+  if curl -f http://localhost:8000/health; then
+    echo "Deployment successful"
+    exit 0
   fi
+  sleep 2
 done
 
-echo "✅ New version is healthy"
-
-# Step 4: Now safely stop old containers
-docker compose down
-
-# Step 5: Start clean stable version
-docker compose up -d
-
-echo "🎉 Rolling deployment complete"
+echo "Deployment failed"
+exit 1
