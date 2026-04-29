@@ -5,6 +5,10 @@ on:
     branches: ["**"]
   pull_request:
 
+env:
+  REGISTRY: localhost:5000
+  IMAGE_PREFIX: hng14-stage2-devops
+
 jobs:
 
   lint:
@@ -22,6 +26,19 @@ jobs:
 
       - name: Python lint
         run: flake8 api worker
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: JS lint
+        run: |
+          if [ -f frontend/package.json ]; then
+            cd frontend
+            npm install
+            npx eslint .
+          fi
 
 
   test:
